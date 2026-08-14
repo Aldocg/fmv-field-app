@@ -1,13 +1,29 @@
 import { useEffect, useMemo, useState } from 'react'
 import { format, parseISO } from 'date-fns'
-import { ArrowLeft, MapPin, Save, X } from 'lucide-react'
+import {
+  ArrowLeft,
+  ExternalLink,
+  MapPin,
+  PlusCircle,
+  Save,
+  Wrench,
+  X
+} from 'lucide-react'
 import { toast } from 'sonner'
 import type {
+  ExtraServiceDraft,
+  ExtraServiceRecord,
   MonthlyServiceHistory,
   MonthlyServiceItem,
-  OperationalStatus
+  OperationalStatus,
+  ServiceCatalogOption
 } from '../types/domain'
 import { getVisitHistory, saveVisitResult } from '../services/planService'
+import {
+  createExtraService,
+  getServiceCatalog,
+  listExtrasForVisit
+} from '../features/extras/extrasService'
 import { normalizeStatus } from '../utils/status'
 import { StatusSelector } from './StatusSelector'
 import { HistoryTimeline } from './HistoryTimeline'
@@ -32,11 +48,23 @@ function friendlyDatabaseError(error: unknown) {
     'The service is approved and cannot be edited.',
     'The service is already in the billing process.',
     'This service was registered by another user.',
-    'Only the original user can correct a rejected service.'
+    'Only the original user can correct a rejected service.',
+    'Client is required.',
+    'The client was not found.',
+    'The selected visit does not belong to the selected client.',
+    'Invalid service source.',
+    'Service is required.',
+    'The selected service was not found.',
+    'Service name is required.',
+    'Quantity must be greater than zero.',
+    'Unit Price cannot be negative.',
+    'Total cannot be negative.',
+    'Performed Date is required.',
+    'Performed Date cannot be in the future.'
   ]
 
   return knownMessages.find((known) => message.includes(known)) ||
-    'Could not update the service visit.'
+    'Could not complete the operation.'
 }
 
 export function VisitDetail({
@@ -57,6 +85,20 @@ export function VisitDetail({
   const [saving, setSaving] = useState(false)
   const [historyLoading, setHistoryLoading] = useState(true)
 
+  const [extras, setExtras] = useState<ExtraServiceRecord[]>([])
+  const [extrasLoading, setExtrasLoading] = useState(true)
+  const [catalog, setCatalog] = useState<ServiceCatalogOption[]>([])
+  const [showExtraForm, setShowExtraForm] = useState(false)
+  const [savingExtra, setSavingExtra] = useState(false)
+  const [extraMode, setExtraMode] = useState<'catalog' | 'manual'>('catalog')
+  const [extraServiceId, setExtraServiceId] = useState<number | ''>('')
+  const [extraManualName, setExtraManualName] = useState('')
+  const [extraDescription, setExtraDescription] = useState('')
+  const [extraQuantity, setExtraQuantity] = useState('1')
+  const [extraUnitPrice, setExtraUnitPrice] = useState('')
+  const [extraPerformedDate, setExtraPerformedDate] = useState(todayIso())
+  const [extraNotes, setExtraNotes] = useState('')
+
   useEffect(() => {
     getVisitHistory(item.id_item)
       .then(setHistory)
@@ -64,11 +106,23 @@ export function VisitDetail({
       .finally(() => setHistoryLoading(false))
   }, [item.id_item])
 
+  useEffect(() => {
+    Promise.all([
+      listExtrasForVisit(item.id_item),
+      getServiceCatalog()
+    ])
+      .then(([extraRows, serviceRows]) => {
+        setExtras(extraRows)
+        setCatalog(serviceRows)
+      })
+      .catch((error) => {
+        console.warn('Could not load Extra Services:', error)
+      })
+      .finally(() => setExtrasLoading(false))
+  }, [item.id_item])
+
   function changeStatus(next: OperationalStatus) {
     setStatus(next)
-
-    // Exact current RPC rule:
-    // every saved service result requires Actual Service Date.
     if (!actualDate) setActualDate(todayIso())
   }
 
@@ -130,7 +184,124 @@ export function VisitDetail({
     }
   }
 
-  const address = [item.address_snapshot, item.city_snapshot].filter(Boolean).join(', ')
+  function resetExtraForm() {
+    setExtraMode('catalog')
+    setExtraServiceId('')
+    setExtraManualName('')
+    setExtraDescription('')
+    setExtraQuantity('1')
+    setExtraUnitPrice('')
+    setExtraPerformedDate(todayIso())
+    setExtraNotes('')
+  }
+
+  async function saveExtra() {
+    const quantity = Number(extraQuantity)
+
+    if (!Number.isFinite(quantity) || quantity <= 0) {
+      toast.error('Quantity must be greater than zero.')
+      return
+    }
+
+    let serviceName = ''
+    let idServicio: number | null = null
+
+    if (extraMode === 'catalog') {
+      if (extraServiceId === '') {
+        toast.error('Select a service.')
+        return
+      }
+
+      const service = catalog.find(
+        (row) => row.id_servicio === extraServiceId
+      )
+
+      if (!service) {
+        toast.error('The selected service was not found.')
+        return
+      }
+
+      idServicio = service.id_servicio
+      serviceName = service.servicio
+    } else {
+      serviceName = extraManualName.trim()
+
+      if (!serviceName) {
+        toast.error('Service name is required.')
+        return
+      }
+    }
+
+    const unitPrice =
+      extraUnitPrice.trim() === '' ? null : Number(extraUnitPrice)
+
+    if (
+      unitPrice !== null &&
+      (!Number.isFinite(unitPrice) || unitPrice < 0)
+    ) {
+      toast.error('Unit Price is invalid.')
+      return
+    }
+
+    if (!extraPerformedDate) {
+      toast.error('Performed Date is required.')
+      return
+    }
+
+    if (extraPerformedDate > todayIso()) {
+      toast.error('Performed Date cannot be in the future.')
+      return
+    }
+
+    const draft: ExtraServiceDraft = {
+      id_item: item.id_item,
+      id_cliente: item.id_cliente,
+      id_servicio: idServicio,
+      service_name: serviceName,
+      service_source: extraMode,
+      description: extraDescription.trim() || null,
+      quantity,
+      unit_price: unitPrice,
+      total:
+        unitPrice === null
+          ? null
+          : Number((quantity * unitPrice).toFixed(2)),
+      performed_date: extraPerformedDate,
+      notes: extraNotes.trim() || null
+    }
+
+    setSavingExtra(true)
+
+    try {
+      const saved = await createExtraService(draft)
+
+      setExtras((current) => [
+        {
+          ...saved,
+          client_name: item.client_name_snapshot,
+          client_address: item.address_snapshot,
+          client_city: item.city_snapshot
+        },
+        ...current
+      ])
+
+      toast.success('Extra Service saved successfully.')
+      resetExtraForm()
+      setShowExtraForm(false)
+    } catch (error) {
+      toast.error(friendlyDatabaseError(error))
+    } finally {
+      setSavingExtra(false)
+    }
+  }
+
+  const address = [item.address_snapshot, item.city_snapshot]
+    .filter(Boolean)
+    .join(', ')
+
+  const mapsUrl = address
+    ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}`
+    : null
 
   return (
     <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-950/35 backdrop-blur-sm">
@@ -166,16 +337,33 @@ export function VisitDetail({
           <div className="space-y-5 p-4 pb-28">
             <div className="rounded-3xl bg-white p-4 shadow-soft">
               <h3 className="text-xl font-bold">{item.client_name_snapshot}</h3>
+
               <p className="mt-2 flex gap-2 text-sm text-slate-500">
                 <MapPin size={16} className="mt-0.5 shrink-0" />
                 {address || 'No address'}
               </p>
 
+              {mapsUrl && (
+                <a
+                  href={mapsUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="mt-3 inline-flex min-h-11 items-center gap-2 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 text-sm font-bold text-emerald-800"
+                >
+                  <MapPin size={17} />
+                  Open in Google Maps
+                  <ExternalLink size={15} />
+                </a>
+              )}
+
               <dl className="mt-4 grid grid-cols-2 gap-3 text-sm">
                 <div>
                   <dt className="text-slate-400">Service</dt>
-                  <dd className="mt-1 font-semibold">{item.service_name_snapshot}</dd>
+                  <dd className="mt-1 font-semibold">
+                    {item.service_name_snapshot}
+                  </dd>
                 </div>
+
                 <div>
                   <dt className="text-slate-400">Scheduled Date</dt>
                   <dd className="mt-1 font-semibold">
@@ -243,19 +431,231 @@ export function VisitDetail({
             </div>
 
             <div className="rounded-3xl bg-white p-4 shadow-soft">
-              <h3 className="font-bold">Extra Services</h3>
-              <p className="mt-1 text-sm text-slate-500">
-                The interface is prepared, but the database entity has not been created yet.
-              </p>
-              <button
-                type="button"
-                onClick={() =>
-                  toast.info('Extra Services database is not connected yet.')
-                }
-                className="mt-3 min-h-11 rounded-2xl border border-emerald-200 bg-emerald-50 px-4 text-sm font-bold text-emerald-800"
-              >
-                + Add Extra Service
-              </button>
+              <div className="flex items-center justify-between gap-3">
+                <div>
+                  <h3 className="font-bold">Extra Services</h3>
+                  <p className="mt-1 text-xs text-slate-500">
+                    Additional work for this visit.
+                  </p>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setShowExtraForm((value) => !value)}
+                  className="inline-flex min-h-10 items-center gap-1.5 rounded-xl bg-emerald-800 px-3 text-xs font-bold text-white"
+                >
+                  <PlusCircle size={16} />
+                  Add Extra
+                </button>
+              </div>
+
+              {showExtraForm && (
+                <div className="mt-4 space-y-4 rounded-2xl border border-slate-200 bg-slate-50 p-3">
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setExtraMode('catalog')}
+                      className={`min-h-11 rounded-xl border px-3 text-sm font-bold ${
+                        extraMode === 'catalog'
+                          ? 'border-emerald-700 bg-emerald-700 text-white'
+                          : 'border-slate-200 bg-white text-slate-700'
+                      }`}
+                    >
+                      Catalog
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => setExtraMode('manual')}
+                      className={`min-h-11 rounded-xl border px-3 text-sm font-bold ${
+                        extraMode === 'manual'
+                          ? 'border-emerald-700 bg-emerald-700 text-white'
+                          : 'border-slate-200 bg-white text-slate-700'
+                      }`}
+                    >
+                      Manual
+                    </button>
+                  </div>
+
+                  {extraMode === 'catalog' ? (
+                    <label className="block">
+                      <span className="text-xs font-semibold text-slate-600">
+                        Service *
+                      </span>
+                      <select
+                        value={extraServiceId}
+                        onChange={(event) =>
+                          setExtraServiceId(
+                            event.target.value
+                              ? Number(event.target.value)
+                              : ''
+                          )
+                        }
+                        className="mt-1 min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm"
+                      >
+                        <option value="">Select service...</option>
+                        {catalog.map((service) => (
+                          <option
+                            key={service.id_servicio}
+                            value={service.id_servicio}
+                          >
+                            {service.servicio}
+                          </option>
+                        ))}
+                      </select>
+                    </label>
+                  ) : (
+                    <label className="block">
+                      <span className="text-xs font-semibold text-slate-600">
+                        Service Name *
+                      </span>
+                      <input
+                        value={extraManualName}
+                        onChange={(event) =>
+                          setExtraManualName(event.target.value)
+                        }
+                        placeholder="Type the service..."
+                        className="mt-1 min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm"
+                      />
+                    </label>
+                  )}
+
+                  <label className="block">
+                    <span className="text-xs font-semibold text-slate-600">
+                      Description
+                    </span>
+                    <textarea
+                      rows={2}
+                      value={extraDescription}
+                      onChange={(event) =>
+                        setExtraDescription(event.target.value)
+                      }
+                      className="mt-1 w-full rounded-xl border border-slate-200 bg-white p-3 text-sm"
+                    />
+                  </label>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <label>
+                      <span className="text-xs font-semibold text-slate-600">
+                        Quantity *
+                      </span>
+                      <input
+                        inputMode="decimal"
+                        value={extraQuantity}
+                        onChange={(event) =>
+                          setExtraQuantity(event.target.value)
+                        }
+                        className="mt-1 min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm"
+                      />
+                    </label>
+
+                    <label>
+                      <span className="text-xs font-semibold text-slate-600">
+                        Unit Price
+                      </span>
+                      <input
+                        inputMode="decimal"
+                        value={extraUnitPrice}
+                        onChange={(event) =>
+                          setExtraUnitPrice(event.target.value)
+                        }
+                        className="mt-1 min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm"
+                      />
+                    </label>
+                  </div>
+
+                  <label className="block">
+                    <span className="text-xs font-semibold text-slate-600">
+                      Performed Date *
+                    </span>
+                    <input
+                      type="date"
+                      max={todayIso()}
+                      value={extraPerformedDate}
+                      onChange={(event) =>
+                        setExtraPerformedDate(event.target.value)
+                      }
+                      className="mt-1 min-h-11 w-full rounded-xl border border-slate-200 bg-white px-3 text-sm"
+                    />
+                  </label>
+
+                  <label className="block">
+                    <span className="text-xs font-semibold text-slate-600">
+                      Notes
+                    </span>
+                    <textarea
+                      rows={3}
+                      value={extraNotes}
+                      onChange={(event) => setExtraNotes(event.target.value)}
+                      className="mt-1 w-full rounded-xl border border-slate-200 bg-white p-3 text-sm"
+                    />
+                  </label>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        resetExtraForm()
+                        setShowExtraForm(false)
+                      }}
+                      className="min-h-11 rounded-xl border border-slate-200 bg-white px-3 text-sm font-bold text-slate-600"
+                    >
+                      Cancel
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={saveExtra}
+                      disabled={savingExtra}
+                      className="min-h-11 rounded-xl bg-emerald-800 px-3 text-sm font-bold text-white disabled:opacity-60"
+                    >
+                      {savingExtra ? 'Saving...' : 'Save Extra'}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              <div className="mt-4 space-y-2">
+                {extrasLoading && (
+                  <p className="text-sm text-slate-500">
+                    Loading Extra Services...
+                  </p>
+                )}
+
+                {!extrasLoading && extras.length === 0 && (
+                  <p className="text-sm text-slate-500">
+                    No Extra Services for this visit.
+                  </p>
+                )}
+
+                {extras.map((extra) => (
+                  <div
+                    key={extra.id_extra}
+                    className="flex items-start gap-3 rounded-2xl border border-slate-100 bg-slate-50 p-3"
+                  >
+                    <div className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-emerald-50 text-emerald-800">
+                      <Wrench size={17} />
+                    </div>
+
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-bold text-slate-900">
+                        {extra.service_name}
+                      </p>
+                      <p className="mt-1 text-xs text-slate-500">
+                        Qty {extra.quantity} · {extra.performed_date}
+                        {extra.total !== null
+                          ? ` · $${extra.total.toFixed(2)}`
+                          : ''}
+                      </p>
+                      {extra.notes && (
+                        <p className="mt-1 text-xs leading-5 text-slate-500">
+                          {extra.notes}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
             </div>
 
             <div className="rounded-3xl bg-white p-4 shadow-soft">
@@ -266,7 +666,9 @@ export function VisitDetail({
 
               <div className="mt-4">
                 {historyLoading ? (
-                  <p className="text-sm text-slate-500">Loading history...</p>
+                  <p className="text-sm text-slate-500">
+                    Loading history...
+                  </p>
                 ) : (
                   <HistoryTimeline rows={history} />
                 )}

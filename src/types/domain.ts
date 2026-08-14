@@ -82,6 +82,9 @@ export interface PlanClient {
   address: string
   city: string
   scheduledDays: string[]
+  services: string[]
+  nextVisit: string | null
+  nextStatus: OperationalStatus | null
 }
 
 export interface ServiceCatalogOption {
@@ -107,6 +110,8 @@ export interface ExtraServiceRecord {
   updated_at: string
   created_by_name?: string | null
   client_name?: string | null
+  client_address?: string | null
+  client_city?: string | null
 }
 
 export interface ExtraServiceDraft {

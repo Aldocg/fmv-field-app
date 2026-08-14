@@ -44,6 +44,9 @@ export async function listExtras(): Promise<ExtraServiceRecord[]> {
   const userIds = [...new Set(extras.map((x) => x.created_by).filter(Boolean))]
 
   const names = new Map<string, string>()
+  const clientNames = new Map<number, string>()
+  const clientAddresses = new Map<number, string>()
+  const clientCities = new Map<number, string>()
 
   if (userIds.length) {
     const { data: profiles } = await supabase
@@ -56,9 +59,29 @@ export async function listExtras(): Promise<ExtraServiceRecord[]> {
     })
   }
 
+  const clientIds = [...new Set(extras.map((x) => x.id_cliente).filter(Boolean))]
+
+  if (clientIds.length) {
+    const { data: clients, error: clientsError } = await supabase
+      .from('clientes')
+      .select('id_cliente, nombre, calle, ciudad')
+      .in('id_cliente', clientIds)
+
+    if (!clientsError) {
+      ;(clients || []).forEach((client) => {
+        clientNames.set(client.id_cliente, client.nombre || `Client #${client.id_cliente}`)
+        clientAddresses.set(client.id_cliente, client.calle || '')
+        clientCities.set(client.id_cliente, client.ciudad || '')
+      })
+    }
+  }
+
   return extras.map((x) => ({
     ...x,
-    created_by_name: names.get(x.created_by) || 'Unknown'
+    created_by_name: names.get(x.created_by) || 'Unknown',
+    client_name: clientNames.get(x.id_cliente) || `Client #${x.id_cliente}`,
+    client_address: clientAddresses.get(x.id_cliente) || null,
+    client_city: clientCities.get(x.id_cliente) || null
   }))
 }
 
@@ -81,4 +104,12 @@ export async function createExtraService(
 
   if (error) throw error
   return data as ExtraServiceRecord
+}
+
+
+export async function listExtrasForVisit(
+  idItem: number
+): Promise<ExtraServiceRecord[]> {
+  const all = await listExtras()
+  return all.filter((extra) => extra.id_item === idItem)
 }

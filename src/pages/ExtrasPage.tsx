@@ -1,11 +1,14 @@
 import { useEffect, useMemo, useState } from 'react'
 import { format } from 'date-fns'
-import { PlusCircle, Wrench } from 'lucide-react'
+import { PlusCircle } from 'lucide-react'
 import { toast } from 'sonner'
 import { SearchBar } from '../components/SearchBar'
 import { LoadingSkeleton } from '../components/LoadingSkeleton'
 import { EmptyState } from '../components/EmptyState'
 import { ErrorState } from '../components/ErrorState'
+import { CompactExtraRow } from '../components/CompactExtraRow'
+import { LocationAccordion } from '../components/LocationAccordion'
+import { ExtraDetail } from '../components/ExtraDetail'
 import { useOpenPlanItems } from '../hooks/useOpenPlanItems'
 import {
   createExtraService,
@@ -17,6 +20,7 @@ import type {
   ExtraServiceRecord,
   ServiceCatalogOption
 } from '../types/domain'
+import { groupByCityAndStreet } from '../utils/locationGrouping'
 
 export function ExtrasPage() {
   const { items } = useOpenPlanItems()
@@ -27,6 +31,7 @@ export function ExtrasPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [showForm, setShowForm] = useState(false)
+  const [selected, setSelected] = useState<ExtraServiceRecord | null>(null)
   const [saving, setSaving] = useState(false)
 
   const [idCliente, setIdCliente] = useState<number | ''>('')
@@ -93,6 +98,7 @@ export function ExtrasPage() {
 
     return extras.filter((extra) =>
       [
+        extra.client_name,
         extra.service_name,
         extra.description,
         extra.notes,
@@ -104,6 +110,15 @@ export function ExtrasPage() {
         .includes(q)
     )
   }, [extras, query])
+
+  const groups = useMemo(
+    () =>
+      groupByCityAndStreet(filtered, (extra) => ({
+        city: extra.client_city,
+        address: extra.client_address
+      })),
+    [filtered]
+  )
 
   function resetForm() {
     setIdCliente('')
@@ -125,7 +140,6 @@ export function ExtrasPage() {
     }
 
     const qty = Number(quantity || '0')
-
     if (!Number.isFinite(qty) || qty <= 0) {
       toast.error('Quantity must be greater than zero.')
       return
@@ -150,16 +164,13 @@ export function ExtrasPage() {
       }
     } else {
       serviceName = manualServiceName.trim()
-
       if (!serviceName) {
         toast.error('Service name is required.')
         return
       }
     }
 
-    const price =
-      unitPrice.trim() === '' ? null : Number(unitPrice)
-
+    const price = unitPrice.trim() === '' ? null : Number(unitPrice)
     if (price !== null && (!Number.isFinite(price) || price < 0)) {
       toast.error('Unit Price is invalid.')
       return
@@ -199,28 +210,22 @@ export function ExtrasPage() {
   }
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-4">
       <header className="flex items-start justify-between gap-3">
         <div>
-          <p className="text-sm font-semibold uppercase tracking-wide text-emerald-700">
+          <p className="text-xs font-semibold uppercase tracking-wide text-emerald-700">
             Informational Module
           </p>
-          <h1 className="mt-1 text-3xl font-black tracking-tight">
-            Extra Services
-          </h1>
-          <p className="mt-2 text-sm leading-6 text-slate-500">
-            Record additional work performed for a client. These records are
-            informational and independent from the monthly service result.
-          </p>
+          <h1 className="mt-1 text-2xl font-black tracking-tight">Extra Services</h1>
         </div>
 
         <button
           type="button"
           onClick={() => setShowForm(true)}
-          className="grid min-h-12 min-w-12 place-items-center rounded-2xl bg-emerald-800 text-white shadow-sm"
-          aria-label="Add Extra Service"
+          className="inline-flex min-h-11 items-center gap-2 rounded-xl bg-emerald-800 px-3 text-sm font-bold text-white shadow-sm"
         >
-          <PlusCircle size={21} />
+          <PlusCircle size={18} />
+          Add
         </button>
       </header>
 
@@ -230,7 +235,7 @@ export function ExtrasPage() {
         placeholder="Search extra service..."
       />
 
-      {loading && <LoadingSkeleton count={3} />}
+      {loading && <LoadingSkeleton count={4} />}
       {error && <ErrorState message={error} onRetry={load} />}
 
       {!loading && !error && filtered.length === 0 && (
@@ -240,58 +245,26 @@ export function ExtrasPage() {
         />
       )}
 
-      <div className="space-y-3">
-        {filtered.map((extra) => (
-          <article
-            key={extra.id_extra}
-            className="rounded-3xl border border-slate-100 bg-white p-4 shadow-soft"
-          >
-            <div className="flex items-start gap-3">
-              <div className="grid h-10 w-10 shrink-0 place-items-center rounded-2xl bg-emerald-50 text-emerald-800">
-                <Wrench size={19} />
-              </div>
+      {!loading && !error && groups.length > 0 && (
+        <>
+          <p className="text-xs text-slate-400">
+            Browse extra services by client city and street.
+          </p>
 
-              <div className="min-w-0 flex-1">
-                <h2 className="font-bold text-slate-900">
-                  {extra.service_name}
-                </h2>
+          <LocationAccordion
+            groups={groups}
+            searchActive={query.trim().length > 0}
+            itemKey={(extra) => extra.id_extra}
+            renderItem={(extra) => (
+              <CompactExtraRow extra={extra} onOpen={setSelected} />
+            )}
+          />
+        </>
+      )}
 
-                <p className="mt-1 text-xs font-semibold uppercase tracking-wide text-slate-400">
-                  {extra.service_source === 'catalog'
-                    ? 'Service Catalog'
-                    : 'Manual Service'}
-                </p>
-
-                {extra.description && (
-                  <p className="mt-2 text-sm leading-6 text-slate-600">
-                    {extra.description}
-                  </p>
-                )}
-
-                <div className="mt-3 flex flex-wrap gap-2 text-xs font-semibold text-slate-500">
-                  <span className="rounded-full bg-slate-100 px-3 py-1">
-                    Qty {extra.quantity}
-                  </span>
-
-                  <span className="rounded-full bg-slate-100 px-3 py-1">
-                    {extra.performed_date}
-                  </span>
-
-                  {extra.total !== null && (
-                    <span className="rounded-full bg-emerald-50 px-3 py-1 text-emerald-800">
-                      ${extra.total.toFixed(2)}
-                    </span>
-                  )}
-                </div>
-
-                <p className="mt-3 text-xs text-slate-400">
-                  Created by {extra.created_by_name || 'Unknown'}
-                </p>
-              </div>
-            </div>
-          </article>
-        ))}
-      </div>
+      {selected && (
+        <ExtraDetail extra={selected} onClose={() => setSelected(null)} />
+      )}
 
       {showForm && (
         <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-950/40 backdrop-blur-sm">
@@ -362,7 +335,6 @@ export function ExtrasPage() {
 
                 <div>
                   <span className="text-sm font-semibold">Service Source *</span>
-
                   <div className="mt-2 grid grid-cols-2 gap-2">
                     <button
                       type="button"
@@ -373,7 +345,7 @@ export function ExtrasPage() {
                           : 'border-slate-200 bg-white text-slate-700'
                       }`}
                     >
-                      Service Catalog
+                      Catalog
                     </button>
 
                     <button
@@ -385,7 +357,7 @@ export function ExtrasPage() {
                           : 'border-slate-200 bg-white text-slate-700'
                       }`}
                     >
-                      Manual Service
+                      Manual
                     </button>
                   </div>
                 </div>
@@ -396,9 +368,7 @@ export function ExtrasPage() {
                     <select
                       value={idServicio}
                       onChange={(e) =>
-                        setIdServicio(
-                          e.target.value ? Number(e.target.value) : ''
-                        )
+                        setIdServicio(e.target.value ? Number(e.target.value) : '')
                       }
                       className="mt-2 min-h-12 w-full rounded-2xl border border-slate-200 bg-white px-3"
                     >
@@ -447,9 +417,7 @@ export function ExtrasPage() {
                   </label>
 
                   <label className="block">
-                    <span className="text-sm font-semibold">
-                      Unit Price (optional)
-                    </span>
+                    <span className="text-sm font-semibold">Unit Price</span>
                     <input
                       inputMode="decimal"
                       value={unitPrice}
