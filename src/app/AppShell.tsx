@@ -1,0 +1,1 @@
+import {Outlet} from 'react-router-dom';import {BottomNavigation} from '../components/BottomNavigation';export function AppShell(){return <div className="min-h-screen"><main className="safe-top mx-auto max-w-xl px-4 pb-28 pt-4"><Outlet/></main><BottomNavigation/></div>}

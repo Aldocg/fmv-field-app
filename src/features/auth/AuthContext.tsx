@@ -1,0 +1,9 @@
+import {createContext,useContext,useEffect,useMemo,useState,type ReactNode} from 'react'
+import type {Session,User} from '@supabase/supabase-js'
+import {supabase} from '../../lib/supabase'
+import {loadProfile} from '../../services/authService'
+import type {Profile} from '../../types/domain'
+type Ctx={session:Session|null;user:User|null;profile:Profile|null;loading:boolean;signIn:(e:string,p:string)=>Promise<void>;signOut:()=>Promise<void>}
+const AuthContext=createContext<Ctx|undefined>(undefined)
+export function AuthProvider({children}:{children:ReactNode}){const[session,setSession]=useState<Session|null>(null);const[profile,setProfile]=useState<Profile|null>(null);const[loading,setLoading]=useState(true);async function sync(s:Session|null){setSession(s);if(!s?.user){setProfile(null);return}const p=await loadProfile(s.user.id);if(!p.active){await supabase.auth.signOut();throw new Error('This account is inactive.')}setProfile(p)}useEffect(()=>{let m=true;supabase.auth.getSession().then(async({data})=>{try{if(m)await sync(data.session)}finally{if(m)setLoading(false)}});const {data}=supabase.auth.onAuthStateChange((_e,s)=>{if(m)setTimeout(()=>sync(s).catch(console.error),0)});return()=>{m=false;data.subscription.unsubscribe()}},[]);async function signIn(email:string,password:string){const {data,error}=await supabase.auth.signInWithPassword({email,password});if(error)throw error;await sync(data.session)}async function signOut(){await supabase.auth.signOut();setProfile(null)}const value=useMemo(()=>({session,user:session?.user??null,profile,loading,signIn,signOut}),[session,profile,loading]);return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>}
+export function useAuth(){const c=useContext(AuthContext);if(!c)throw new Error('useAuth must be used inside AuthProvider');return c}

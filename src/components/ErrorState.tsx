@@ -1,0 +1,1 @@
+export function ErrorState({message,onRetry}:{message:string;onRetry?:()=>void}){return <div className="rounded-3xl border border-rose-100 bg-rose-50 p-5 text-rose-900"><b>Something went wrong</b><p className="mt-1 text-sm">{message}</p>{onRetry&&<button onClick={onRetry} className="mt-3 min-h-10 rounded-xl bg-white px-4 text-sm font-semibold">Try again</button>}</div>}

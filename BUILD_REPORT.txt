@@ -1,0 +1,5 @@
+Project files were updated from the supplied Supabase exports.
+Automatic npm install/build validation was not completed in this environment.
+Run locally:
+  npm install
+  npm run build

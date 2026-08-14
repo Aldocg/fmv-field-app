@@ -1,0 +1,1 @@
+export default {content:['./index.html','./src/**/*.{js,ts,jsx,tsx}'],theme:{extend:{boxShadow:{soft:'0 10px 30px rgba(15,23,42,.07)'}}},plugins:[]}
